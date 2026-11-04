@@ -22,6 +22,14 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .top{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));display:flex;gap:8px;z-index:3}
 .top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+#stage{touch-action:none}
+.zoombar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));z-index:3;
+  display:flex;gap:4px;padding:4px;border-radius:999px;background:var(--glass);border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.zoombar button{font:700 13px var(--jp);color:var(--fg);background:transparent;border:0;border-radius:999px;min-width:44px;height:36px;padding:0 10px}
+.zoombar button[aria-pressed="true"]{background:#fff;color:#000}
+.zoomchip{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;font:800 28px var(--jp);color:#fff;
+  background:rgba(0,0,0,.55);border-radius:14px;padding:8px 18px;pointer-events:none;font-variant-numeric:tabular-nums}
 #micBtn.warn{color:#ffb4ab;border-color:rgba(255,120,110,.6)}
 #micBtn.off{color:var(--muted)}
 .top.left{right:auto;left:calc(8px + env(safe-area-inset-left,0px))}
@@ -69,7 +77,6 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 <div id="timer" class="chip" hidden><span class="dot"></span><span id="tt">00:00</span></div>
 <div class="top">
   <button type="button" id="micBtn" hidden>🎤 マイクOFF</button>
-  <button type="button" id="zoomBtn" hidden>1x</button>
   <button type="button" id="undo">↶ 取消</button>
   <button type="button" id="serveBtn">サーブ切替</button>
   <button type="button" id="settings">設定</button>
@@ -86,6 +93,9 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
     <button type="button" class="plus" id="plusB">＋1<small id="labB">アウェイ</small></button>
   </div>
 </div>
+
+<div class="zoombar" id="zoomBar" role="group" aria-label="ズーム" hidden></div>
+<div class="zoomchip" id="zoomChip" hidden>1.0x</div>
 
 <div class="banner" id="banner" hidden></div>
 
@@ -311,29 +321,53 @@ $("micBtn").onclick = async () => {
   }
 };
 
-/* ---------- zoom (wide angle) ---------- */
-let zoomSteps = [], zoomIdx = 0;
+/* ---------- zoom: camera zoom where the phone offers it, otherwise a centre crop ---------- */
+let hw = null, zMin = 1, zMax = 4, zCur = 1, dz = 1, lastHz = null, zTimer = null, chipT = null, presets = [];
 function setupZoom(){
-  const btn = $("zoomBtn"); btn.hidden = true; zoomSteps = [];
+  hw = null; lastHz = null;
   const track = stream && stream.getVideoTracks()[0];
   const caps = track && track.getCapabilities ? track.getCapabilities() : {};
-  if (!caps.zoom || caps.zoom.max <= caps.zoom.min) return;
-  const { min, max } = caps.zoom;
-  [min, 1, 2].forEach(z => { if (z >= min && z <= max && !zoomSteps.some(s => Math.abs(s - z) < 0.05)) zoomSteps.push(z); });
-  if (zoomSteps.length < 2) return;
-  zoomSteps.sort((a,b) => a-b);
-  let saved = null; try { saved = +localStorage.getItem(KEY + "-zoom"); } catch(e){}
-  zoomIdx = 0;                                   // start at the widest view
-  if (saved) { const i = zoomSteps.findIndex(s => Math.abs(s - saved) < 0.05); if (i >= 0) zoomIdx = i; }
-  applyZoom(); btn.hidden = false;
+  if (caps.zoom && caps.zoom.max > caps.zoom.min) hw = { min: caps.zoom.min, max: caps.zoom.max };
+  zMin = hw ? Math.min(hw.min, 1) : 1;
+  zMax = hw ? Math.max(Math.min(hw.max, 10), 4) : 4;
+  presets = [];
+  if (zMin < 0.95) presets.push({ z: zMin, l: "広角" });
+  presets.push({ z: 1, l: "標準" }, { z: 2, l: "2x" }, { z: 3, l: "3x" });
+  presets = presets.filter(p => p.z <= zMax + 0.01);
+  const bar = $("zoomBar"); bar.innerHTML = "";
+  presets.forEach(p => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = p.l; b.dataset.z = p.z;
+    b.setAttribute("aria-label", p.l === "広角" ? `広角（${Math.round(p.z*10)/10}x）` : p.l === "標準" ? "標準（1x）" : `ズーム ${p.l}`);
+    b.onclick = () => { setZoom(p.z); showChip(); };
+    bar.appendChild(b);
+  });
+  bar.hidden = false;
+  let saved = 1; try { const s = +localStorage.getItem(KEY + "-zoom"); if (s) saved = s; } catch(e){}
+  setZoom(saved);
 }
-async function applyZoom(){
-  const z = zoomSteps[zoomIdx], track = stream && stream.getVideoTracks()[0];
-  try { await track.applyConstraints({ advanced:[{ zoom:z }] }); } catch(e){}
-  $("zoomBtn").textContent = (Math.round(z*10)/10) + "x";
-  try { localStorage.setItem(KEY + "-zoom", String(z)); } catch(e){}
+function setZoom(z){
+  zCur = Math.min(zMax, Math.max(zMin, z));
+  const hz = hw ? Math.min(hw.max, Math.max(hw.min, zCur)) : 1;
+  dz = Math.max(1, zCur / hz);                       // whatever the camera can't do, crop digitally
+  const track = stream && stream.getVideoTracks()[0];
+  if (hw && track && (lastHz === null || Math.abs(hz - lastHz) > 0.01)){
+    lastHz = hz; clearTimeout(zTimer);
+    zTimer = setTimeout(() => { track.applyConstraints({ advanced:[{ zoom: hz }] }).catch(()=>{}); }, 40);
+  }
+  $("zoomBar").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(Math.abs(+b.dataset.z - zCur) < 0.05)));
+  try { localStorage.setItem(KEY + "-zoom", String(zCur)); } catch(e){}
 }
-$("zoomBtn").onclick = () => { if (zoomSteps.length){ zoomIdx = (zoomIdx + 1) % zoomSteps.length; applyZoom(); } };
+function showChip(){
+  const c = $("zoomChip"); c.textContent = (Math.round(zCur*10)/10).toFixed(1) + "x"; c.hidden = false;
+  clearTimeout(chipT); chipT = setTimeout(() => c.hidden = true, 900);
+}
+/* two-finger pinch on the picture */
+let pinch = null;
+const tdist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+$("stage").addEventListener("touchstart", e => { if (e.touches.length === 2 && stream){ pinch = { d: tdist(e.touches), z: zCur }; e.preventDefault(); } }, { passive:false });
+$("stage").addEventListener("touchmove", e => { if (pinch && e.touches.length === 2){ e.preventDefault(); setZoom(pinch.z * tdist(e.touches) / pinch.d); showChip(); } }, { passive:false });
+$("stage").addEventListener("touchend", e => { if (e.touches.length < 2) pinch = null; });
+document.addEventListener("gesturestart", e => e.preventDefault());   // stop iOS from zooming the page itself
 
 function fitCanvas(){
   const vw = video.videoWidth, vh = video.videoHeight;
@@ -392,7 +426,12 @@ function drawBug(){
 
 function frame(){
   fitCanvas();
-  if (video.readyState >= 2){ cx.drawImage(video, 0, 0, cv.width, cv.height); }
+  if (video.readyState >= 2){
+    if (dz > 1.001){
+      const vw = video.videoWidth, vh = video.videoHeight, sw = vw / dz, sh = vh / dz;
+      cx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cv.width, cv.height);
+    } else cx.drawImage(video, 0, 0, cv.width, cv.height);
+  }
   else { cx.fillStyle = "#000"; cx.fillRect(0,0,cv.width,cv.height); }
   drawBug();
   if (recorder){ const s = Math.floor((Date.now()-recStart)/1000); $("tt").textContent = `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; }
