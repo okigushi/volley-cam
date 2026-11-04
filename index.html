@@ -93,7 +93,7 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
   <div class="card">
     <h2>バレー撮影スコア</h2>
     <p>カメラで撮影しながら、画面の「＋1」で点数を入れると、点数入りの動画として録画できます。</p>
-    <p>iPhoneは横向きにして使ってください。長い試合は1セットごとに録画を分けると安全です。</p>
+    <p>スマホは横向きにして使ってください。長い試合は1セットごとに録画を分けると安全です。</p>
     <p id="camErr" style="color:#ff8a80" hidden></p>
     <div class="row"><button type="button" class="primary" id="startBtn">カメラを起動</button></div>
   </div>
@@ -214,6 +214,30 @@ function swatches(){
   });
 }
 
+/* ---------- device / in-app browser handling ---------- */
+const UA = navigator.userAgent;
+const IS_ANDROID = /Android/i.test(UA), IS_IOS = /iPhone|iPad|iPod/i.test(UA);
+const IN_LINE = /\bLine\//i.test(UA);
+const IN_APP = IN_LINE || /FBAN|FBAV|Instagram|KAKAOTALK/i.test(UA);
+// LINE can hand the page to the phone's normal browser with this parameter
+if (IN_LINE && !/openExternalBrowser=1/.test(location.search)) {
+  location.replace(location.pathname + "?openExternalBrowser=1");
+}
+function camErrorText(e){
+  const name = (e && e.name) || "";
+  if (window.isSecureContext === false) return "カメラはhttpsのページでしか使えません。GitHub Pagesに置いたURLで開いてください。";
+  if (IN_APP) return IS_ANDROID
+    ? "アプリの中のブラウザではカメラが使えません。右上の「︙」→「ブラウザで開く」でChromeから開いてください。"
+    : "アプリの中のブラウザではカメラが使えません。共有ボタン →「Safariで開く」で開いてください。";
+  if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError")
+    return "ほかのアプリがカメラを使っています。カメラやビデオ通話のアプリを閉じてから、もう一度「カメラを起動」を押してください。";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "カメラが見つかりませんでした。スマホを再起動してから、もう一度お試しください。";
+  if (IS_ANDROID) return "カメラが許可されていません。Chromeのアドレス欄の左のマーク →「権限」（または「サイトの設定」）で、カメラとマイクを「許可」にしてから、ページを再読み込みしてください。それでもだめなら、スマホの「設定」→「アプリ」→「Chrome」→「権限」でカメラとマイクを許可してください。";
+  if (IS_IOS) return "カメラが許可されていません。「設定」アプリ →「アプリ」→ 使っているブラウザ（SafariまたはChrome）→「カメラ」と「マイク」を許可にしてから、ページを開き直してください。";
+  return "カメラを使えませんでした。ブラウザの設定で、このページのカメラとマイクを許可してください。";
+}
+
 /* ---------- camera + compositing ---------- */
 const video = $("cam"), cv = $("out"), cx = cv.getContext("2d");
 let stream = null;
@@ -233,9 +257,7 @@ async function startCam(){
     }
     catch(e2){
       const err = $("camErr");
-      err.textContent = location.protocol !== "https:"
-        ? "カメラはhttpsのページでしか使えません。GitHub Pagesなどに置いたURLで開いてください。"
-        : "カメラを使えませんでした。設定アプリ →  Safari → カメラ で「許可」になっているか確認してください。";
+      err.textContent = camErrorText(e2);
       err.hidden = false; return false;
     }
   }
