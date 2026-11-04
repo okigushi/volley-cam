@@ -22,6 +22,7 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .top{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));display:flex;gap:8px;z-index:3}
 .top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+#micBtn{color:#ffb4ab;border-color:rgba(255,120,110,.6)}
 .top.left{right:auto;left:calc(8px + env(safe-area-inset-left,0px))}
 #timer{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:3;font-variant-numeric:tabular-nums}
 #timer .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--rec);margin-right:6px;vertical-align:1px}
@@ -66,6 +67,7 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 
 <div id="timer" class="chip" hidden><span class="dot"></span><span id="tt">00:00</span></div>
 <div class="top">
+  <button type="button" id="micBtn" hidden>🎤 マイクOFF</button>
   <button type="button" id="zoomBtn" hidden>1x</button>
   <button type="button" id="undo">↶ 取消</button>
   <button type="button" id="serveBtn">サーブ切替</button>
@@ -220,13 +222,15 @@ async function startCam(){
   $("camErr").hidden = true;
   if (stream) stream.getTracks().forEach(t => t.stop());
   const h = S.q, w = Math.round(h*16/9);
+  const vc = { facingMode:{ideal:"environment"}, width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} };
   try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:{ideal:"environment"}, width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} },
-      audio:true
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ video:vc, audio:AUDIO });
   }catch(e){
-    try { stream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:{ideal:"environment"}}, audio:false }); }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video:vc, audio:false });
+      // try the microphone on its own so a camera-only fallback still gets sound
+      try { const a = await navigator.mediaDevices.getUserMedia({ audio:AUDIO }); a.getAudioTracks().forEach(t => stream.addTrack(t)); } catch(e3){}
+    }
     catch(e2){
       const err = $("camErr");
       err.textContent = location.protocol !== "https:"
@@ -235,11 +239,41 @@ async function startCam(){
       err.hidden = false; return false;
     }
   }
-  video.srcObject = stream;
+  video.srcObject = new MediaStream(stream.getVideoTracks());
   await video.play().catch(()=>{});
   setupZoom();
+  setupAudio();
   return true;
 }
+
+/* ---------- microphone ---------- */
+const AUDIO = { echoCancellation:false, noiseSuppression:false, autoGainControl:true };
+let actx = null, adest = null, asrc = null;
+function micTrack(){ const t = stream && stream.getAudioTracks()[0]; return t && t.readyState === "live" ? t : null; }
+function setupAudio(){
+  const t = micTrack();
+  $("micBtn").hidden = !!t;
+  if (!t) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!actx) actx = new AC();
+    if (asrc) { try { asrc.disconnect(); } catch(e){} }
+    adest = adest || actx.createMediaStreamDestination();
+    asrc = actx.createMediaStreamSource(new MediaStream([t]));
+    asrc.connect(adest);
+    actx.resume().catch(()=>{});
+  } catch(e){ adest = null; }
+}
+$("micBtn").onclick = async () => {
+  try {
+    const a = await navigator.mediaDevices.getUserMedia({ audio:AUDIO });
+    stream.getAudioTracks().forEach(t => { t.stop(); stream.removeTrack(t); });
+    a.getAudioTracks().forEach(t => stream.addTrack(t));
+    setupAudio(); flash("マイクがオンになりました");
+  } catch(e){
+    flash("マイクが使えません。iPhoneの設定でこのブラウザのマイクを許可してください");
+  }
+};
 
 /* ---------- zoom (wide angle) ---------- */
 let zoomSteps = [], zoomIdx = 0;
@@ -332,14 +366,18 @@ function frame(){
 /* ---------- recording ---------- */
 let recorder = null, chunks = [], recStart = 0, lastBlob = null, lastName = "";
 function pickType(){
-  const list = ["video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm"];
+  // never pick a video-only codec string: it makes the recorder drop the sound
+  const list = ["video/mp4;codecs=avc1,mp4a.40.2","video/mp4","video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm"];
   for (const t of list){ try { if (MediaRecorder.isTypeSupported(t)) return t; } catch(e){} }
   return "";
 }
 function startRec(){
   if (!window.MediaRecorder || !cv.captureStream){ flash("このブラウザは録画に対応していません（iOS 15以降のSafariで開いてください）"); return; }
   const out = cv.captureStream(30);
-  if (stream) stream.getAudioTracks().forEach(t => out.addTrack(t));
+  if (actx) actx.resume().catch(()=>{});
+  const aTracks = adest ? adest.stream.getAudioTracks() : (micTrack() ? [micTrack()] : []);
+  aTracks.forEach(t => out.addTrack(t));
+  if (!aTracks.length) flash("マイクがオフのため、音声なしで録画します");
   const type = pickType();
   try { recorder = new MediaRecorder(out, type ? { mimeType:type, videoBitsPerSecond: S.q >= 1080 ? 8e6 : 5e6 } : undefined); }
   catch(e){ recorder = new MediaRecorder(out); }
