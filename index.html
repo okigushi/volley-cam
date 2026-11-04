@@ -23,6 +23,8 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
 #stage{touch-action:none}
+.top{gap:5px;top:calc(6px + env(safe-area-inset-top,0px))}
+.top button{font:600 12px var(--jp);padding:6px 9px;border-radius:9px;line-height:1.2}
 .zoombar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));z-index:3;
   display:flex;gap:4px;padding:4px;border-radius:999px;background:var(--glass);border:1px solid var(--line);
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
