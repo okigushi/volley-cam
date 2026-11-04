@@ -32,7 +32,10 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .plus{font:800 22px var(--jp);color:#111;border:0;border-radius:18px;padding:18px 0;width:min(170px,100%);
   box-shadow:0 4px 18px rgba(0,0,0,.35)}
 .plus small{display:block;font-size:12px;font-weight:700;opacity:.8;max-width:150px;margin:0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pt.left .plus{background:var(--a)} .pt.right .plus{background:var(--b)}
+.pt.left .plus{background:var(--a);color:var(--a-ink,#111)} .pt.right .plus{background:var(--b);color:var(--b-ink,#111)}
+.colors{display:flex;flex-wrap:wrap;gap:8px}
+.sw{width:34px;height:34px;border-radius:50%;border:2px solid #2a3340;padding:0}
+.sw[aria-pressed="true"]{outline:3px solid #fff;outline-offset:2px}
 .minus{font:600 13px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:7px 14px;width:max-content}
 #rec{width:74px;height:74px;border-radius:50%;border:4px solid #fff;background:transparent;display:grid;place-items:center;padding:0}
 #rec span{width:54px;height:54px;border-radius:50%;background:var(--rec);transition:all .2s}
@@ -97,8 +100,10 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 <div class="sheet" id="sheet" hidden>
   <form class="card" id="form">
     <h2>試合の設定</h2>
-    <label>左のチーム（黄）<input id="inA" maxlength="12" autocomplete="off"></label>
-    <label>右のチーム（青）<input id="inB" maxlength="12" autocomplete="off"></label>
+    <label>左のチーム名<input id="inA" maxlength="12" autocomplete="off"></label>
+    <div class="label-like" style="display:grid;gap:6px;font-size:13px;color:var(--muted)">左のチームの色<div class="colors" id="colA"></div></div>
+    <label>右のチーム名<input id="inB" maxlength="12" autocomplete="off"></label>
+    <div class="label-like" style="display:grid;gap:6px;font-size:13px;color:var(--muted)">右のチームの色<div class="colors" id="colB"></div></div>
     <label>試合形式
       <select id="inFmt">
         <option value="3">3セットマッチ（2セット先取・3セット目15点）</option>
@@ -143,7 +148,9 @@ const $ = id => document.getElementById(id);
 const KEY = "volley-cam-v1";
 
 /* ---------- score state ---------- */
-const fresh = () => ({ names:["ホーム","アウェイ"], fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
+const PALETTE = [["紫","#7b3fe4"],["黄","#ffb020"],["青","#3aa0ff"],["赤","#e53935"],["緑","#2e9e5b"],["オレンジ","#ff7a1a"],["ピンク","#ff5fa2"],["水色","#33c4e8"],["紺","#1f3a93"],["白","#f2f2f2"],["黒","#2b2b2b"]];
+const ink = hex => { const n = parseInt(hex.slice(1),16), r=n>>16&255, g=n>>8&255, b=n&255; return (0.299*r+0.587*g+0.114*b) > 150 ? "#111" : "#fff"; };
+const fresh = () => ({ names:["ホーム","アウェイ"], colors:["#ffb020","#3aa0ff"], fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
 let S = fresh(), past = [];
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.score) S = Object.assign(fresh(), s); } catch(e){}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} };
@@ -171,7 +178,28 @@ function point(t){
 }
 function minus(t){ if (S.score[t] > 0){ snap(); S.score[t]--; ui(); } }
 function undo(){ if (past.length){ S = JSON.parse(past.pop()); ui(); } else flash("戻せる操作がありません"); }
-function ui(){ $("labA").textContent = S.names[0]; $("labB").textContent = S.names[1]; save(); }
+function ui(){
+  $("labA").textContent = S.names[0]; $("labB").textContent = S.names[1];
+  const r = document.documentElement.style;
+  r.setProperty("--a", S.colors[0]); r.setProperty("--a-ink", ink(S.colors[0]));
+  r.setProperty("--b", S.colors[1]); r.setProperty("--b-ink", ink(S.colors[1]));
+  save();
+}
+/* color swatches in settings */
+let pick = ["#ffb020","#3aa0ff"];
+function swatches(){
+  ["colA","colB"].forEach((id, t) => {
+    const box = $(id); box.innerHTML = "";
+    PALETTE.forEach(([name, hex]) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "sw"; b.style.background = hex;
+      b.setAttribute("aria-label", name); b.title = name;
+      b.setAttribute("aria-pressed", String(pick[t] === hex));
+      b.onclick = () => { pick[t] = hex; swatches(); };
+      box.appendChild(b);
+    });
+  });
+}
 
 /* ---------- camera + compositing ---------- */
 const video = $("cam"), cv = $("out"), cx = cv.getContext("2d");
@@ -251,7 +279,7 @@ function drawBug(){
   const top = y + 34*u;
   cx.fillStyle = "rgba(10,12,18,.86)"; rr(x, top, totalW, rowH*2, 10*u); cx.fill();
   [0,1].forEach(t=>{
-    const ry = top + t*rowH, c = t ? "#3aa0ff" : "#ffb020";
+    const ry = top + t*rowH, c = S.colors[t];
     cx.fillStyle = c; cx.fillRect(x, ry + (t?0:4*u), 8*u, rowH - 4*u);
     // serve dot
     if (S.serve === t && !S.done){ cx.beginPath(); cx.arc(x + nameW - 4*u, ry+rowH/2, 7*u, 0, Math.PI*2); cx.fillStyle = c; cx.fill(); }
@@ -265,7 +293,7 @@ function drawBug(){
     cx.fillText(String(S.sets[t]), x+8*u+nameW+setW/2, ry+rowH/2+1*u);
     // score
     cx.fillStyle = c; cx.fillRect(x+8*u+nameW+setW, ry + (t?0:0), scW, rowH);
-    cx.fillStyle = "#111"; cx.font = `900 ${34*u}px ${font}`;
+    cx.fillStyle = ink(c); cx.font = `900 ${34*u}px ${font}`;
     cx.fillText(String(S.score[t]), x+8*u+nameW+setW+scW/2, ry+rowH/2+2*u);
   });
   // divider
@@ -346,6 +374,7 @@ $("serveBtn").onclick = () => { snap(); S.serve = 1 - S.serve; ui(); };
 
 $("settings").onclick = () => {
   $("inA").value = S.names[0]; $("inB").value = S.names[1];
+  pick = S.colors.slice(); swatches();
   $("inFmt").value = String(S.fmt); $("inPts").value = String(S.pts); $("inQ").value = String(S.q);
   $("inQ").disabled = !!recorder;
   $("confirmRow").hidden = true; $("sheet").hidden = false;
@@ -355,18 +384,19 @@ $("form").addEventListener("submit", async e => {
   e.preventDefault();
   const q = +$("inQ").value, qChanged = q !== S.q;
   S.names = [$("inA").value.trim() || "ホーム", $("inB").value.trim() || "アウェイ"];
+  S.colors = pick.slice();
   S.fmt = +$("inFmt").value; S.pts = +$("inPts").value; S.q = q;
   $("sheet").hidden = true; ui();
   if (qChanged && !recorder && stream) await startCam();
 });
 $("swap").onclick = () => {
   snap();
-  S.names.reverse(); S.score.reverse(); S.sets.reverse(); S.log = S.log.map(p => p.slice().reverse()); S.serve = 1 - S.serve;
+  S.names.reverse(); S.colors.reverse(); pick.reverse(); swatches(); S.score.reverse(); S.sets.reverse(); S.log = S.log.map(p => p.slice().reverse()); S.serve = 1 - S.serve;
   $("inA").value = S.names[0]; $("inB").value = S.names[1]; ui();
 };
 $("reset").onclick = () => $("confirmRow").hidden = false;
 $("resetYes").onclick = () => {
-  const keep = { names:S.names, fmt:S.fmt, pts:S.pts, q:S.q };
+  const keep = { names:S.names, colors:S.colors, fmt:S.fmt, pts:S.pts, q:S.q };
   snap(); S = Object.assign(fresh(), keep); $("sheet").hidden = true; ui(); flash("試合をリセットしました");
 };
 
