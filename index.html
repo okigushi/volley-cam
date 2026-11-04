@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>バレー撮影スコア</title>
+<style>
+:root{
+  --bg:#000; --fg:#fff; --muted:#b8c0cc; --glass:rgba(16,20,28,.62); --line:rgba(255,255,255,.18);
+  --a:#ffb020; --b:#3aa0ff; --rec:#ff3b30;
+  --jp:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--jp);overflow:hidden;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+#stage{position:fixed;inset:0;display:grid;place-items:center}
+#out{max-width:100%;max-height:100%;width:auto;height:auto;display:block}
+video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.top{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));display:flex;gap:8px;z-index:3}
+.top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+#timer{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:3;font-variant-numeric:tabular-nums}
+#timer .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--rec);margin-right:6px;vertical-align:1px}
+.bottom{position:fixed;left:0;right:0;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:3;
+  display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:10px;
+  padding-left:max(10px,env(safe-area-inset-left,0px));padding-right:max(10px,env(safe-area-inset-right,0px))}
+.pt{justify-self:stretch;display:flex;flex-direction:column;gap:6px}
+.pt.right{align-items:flex-end}
+.plus{font:800 22px var(--jp);color:#111;border:0;border-radius:18px;padding:18px 0;width:min(170px,100%);
+  box-shadow:0 4px 18px rgba(0,0,0,.35)}
+.plus small{display:block;font-size:12px;font-weight:700;opacity:.8;max-width:150px;margin:0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pt.left .plus{background:var(--a)} .pt.right .plus{background:var(--b)}
+.minus{font:600 13px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:7px 14px;width:max-content}
+#rec{width:74px;height:74px;border-radius:50%;border:4px solid #fff;background:transparent;display:grid;place-items:center;padding:0}
+#rec span{width:54px;height:54px;border-radius:50%;background:var(--rec);transition:all .2s}
+#rec.on span{width:28px;height:28px;border-radius:7px}
+button{cursor:pointer}
+button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.sheet{position:fixed;inset:0;z-index:10;background:rgba(0,0,0,.66);display:grid;place-items:center;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.card{background:#161c24;border:1px solid #2a3340;border-radius:16px;padding:20px;width:min(440px,100%);max-height:100%;overflow:auto;display:grid;gap:14px}
+.card h2{margin:0;font-size:18px}
+.card p{margin:0;color:var(--muted);font-size:14px;line-height:1.6}
+.card label{display:grid;gap:6px;font-size:13px;color:var(--muted)}
+.card input,.card select{font:500 16px var(--jp);color:var(--fg);background:#0d1117;border:1px solid #2a3340;border-radius:10px;padding:10px}
+.row{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+.row button{font:700 15px var(--jp);border-radius:10px;padding:11px 16px;border:1px solid #2a3340;background:transparent;color:var(--fg)}
+.row button.primary{background:var(--a);color:#1a1200;border-color:var(--a)}
+.row button.danger{color:#ff6b6b;border-color:#5a2a2a}
+.banner{position:fixed;left:50%;top:calc(56px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:4;
+  background:#fff;color:#000;font-weight:800;border-radius:999px;padding:10px 18px;font-size:15px;white-space:nowrap}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+
+<div id="stage"><canvas id="out" width="1280" height="720" aria-label="撮影プレビュー"></canvas></div>
+<video id="cam" playsinline muted autoplay></video>
+
+<div id="timer" class="chip" hidden><span class="dot"></span><span id="tt">00:00</span></div>
+<div class="top">
+  <button type="button" id="undo">↶ 取消</button>
+  <button type="button" id="serveBtn">サーブ切替</button>
+  <button type="button" id="settings">設定</button>
+</div>
+
+<div class="bottom">
+  <div class="pt left">
+    <button type="button" class="minus" id="minusA">−1</button>
+    <button type="button" class="plus" id="plusA">＋1<small id="labA">ホーム</small></button>
+  </div>
+  <button type="button" id="rec" aria-label="録画開始"><span></span></button>
+  <div class="pt right">
+    <button type="button" class="minus" id="minusB">−1</button>
+    <button type="button" class="plus" id="plusB">＋1<small id="labB">アウェイ</small></button>
+  </div>
+</div>
+
+<div class="banner" id="banner" hidden></div>
+
+<!-- start screen -->
+<div class="sheet" id="start">
+  <div class="card">
+    <h2>バレー撮影スコア</h2>
+    <p>カメラで撮影しながら、画面の「＋1」で点数を入れると、点数入りの動画として録画できます。</p>
+    <p>iPhoneは横向きにして使ってください。長い試合は1セットごとに録画を分けると安全です。</p>
+    <p id="camErr" style="color:#ff8a80" hidden></p>
+    <div class="row"><button type="button" class="primary" id="startBtn">カメラを起動</button></div>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="sheet" id="sheet" hidden>
+  <form class="card" id="form">
+    <h2>試合の設定</h2>
+    <label>左のチーム（黄）<input id="inA" maxlength="12" autocomplete="off"></label>
+    <label>右のチーム（青）<input id="inB" maxlength="12" autocomplete="off"></label>
+    <label>試合形式
+      <select id="inFmt">
+        <option value="3">3セットマッチ（2セット先取・3セット目15点）</option>
+        <option value="5">5セットマッチ（3セット先取・5セット目15点）</option>
+        <option value="1">1セットのみ</option>
+      </select>
+    </label>
+    <label>1セットの点数<select id="inPts"><option value="25">25点</option><option value="21">21点</option><option value="15">15点</option></select></label>
+    <label>画質<select id="inQ"><option value="720">標準（720p・おすすめ）</option><option value="1080">高画質（1080p・重め）</option></select></label>
+    <div class="row">
+      <button type="button" id="swap">左右を入れ替え</button>
+      <button type="button" class="danger" id="reset">試合をリセット</button>
+    </div>
+    <div class="row" id="confirmRow" hidden>
+      <span style="flex:1;font-size:13px;color:var(--muted)">点数とセットをすべて0に戻します。</span>
+      <button type="button" class="danger" id="resetYes">リセットする</button>
+    </div>
+    <div class="row">
+      <button type="button" id="cancel">閉じる</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+</div>
+
+<!-- after recording -->
+<div class="sheet" id="saved" hidden>
+  <div class="card">
+    <h2>録画できました</h2>
+    <p id="savedInfo"></p>
+    <p>「写真に保存」→ 共有メニューの「ビデオを保存」で写真アプリに入ります。うまくいかない時は「ファイルに保存」を使ってください。</p>
+    <p>保存してから「閉じる」を押してください。閉じると、次の録画で上書きされます。</p>
+    <div class="row">
+      <button type="button" id="discard">閉じる</button>
+      <button type="button" id="dl">ファイルに保存</button>
+      <button type="button" class="primary" id="share">写真に保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const KEY = "volley-cam-v1";
+
+/* ---------- score state ---------- */
+const fresh = () => ({ names:["ホーム","アウェイ"], fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
+let S = fresh(), past = [];
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.score) S = Object.assign(fresh(), s); } catch(e){}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} };
+const snap = () => { past.push(JSON.stringify(S)); if (past.length > 300) past.shift(); };
+const needSets = () => Math.ceil(S.fmt/2);
+const target = () => (S.fmt > 1 && S.setNo === S.fmt) ? 15 : S.pts;
+
+let bannerT, flashText = "", flashUntil = 0;
+function flash(msg, onVideo){
+  const b = $("banner"); b.textContent = msg; b.hidden = false;
+  clearTimeout(bannerT); bannerT = setTimeout(()=> b.hidden = true, 3000);
+  if (onVideo){ flashText = msg; flashUntil = performance.now() + 4000; }
+}
+function point(t){
+  if (S.done){ flash("試合終了です。設定からリセットできます"); return; }
+  snap(); S.score[t]++; S.serve = t;
+  const o = 1-t;
+  if (S.score[t] >= target() && S.score[t]-S.score[o] >= 2){
+    S.sets[t]++; S.log.push(S.score.slice());
+    const m = `第${S.setNo}セット ${S.names[t]} ${S.score[t]}-${S.score[o]}`;
+    if (S.sets[t] >= needSets()){ S.done = true; flash(`試合終了　${S.names[t]}の勝ち（${S.sets[t]}-${S.sets[o]}）`, true); }
+    else { S.setNo++; S.score = [0,0]; flash(m + "で取得", true); }
+  }
+  ui();
+}
+function minus(t){ if (S.score[t] > 0){ snap(); S.score[t]--; ui(); } }
+function undo(){ if (past.length){ S = JSON.parse(past.pop()); ui(); } else flash("戻せる操作がありません"); }
+function ui(){ $("labA").textContent = S.names[0]; $("labB").textContent = S.names[1]; save(); }
+
+/* ---------- camera + compositing ---------- */
+const video = $("cam"), cv = $("out"), cx = cv.getContext("2d");
+let stream = null;
+
+async function startCam(){
+  $("camErr").hidden = true;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const h = S.q, w = Math.round(h*16/9);
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:"environment"}, width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} },
+      audio:true
+    });
+  }catch(e){
+    try { stream = await navigator.mediaDevices.getUserMedia({ video:{facingMode:{ideal:"environment"}}, audio:false }); }
+    catch(e2){
+      const err = $("camErr");
+      err.textContent = location.protocol !== "https:"
+        ? "カメラはhttpsのページでしか使えません。GitHub Pagesなどに置いたURLで開いてください。"
+        : "カメラを使えませんでした。設定アプリ →  Safari → カメラ で「許可」になっているか確認してください。";
+      err.hidden = false; return false;
+    }
+  }
+  video.srcObject = stream;
+  await video.play().catch(()=>{});
+  return true;
+}
+
+function fitCanvas(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh || recorder) return;
+  if (cv.width !== vw || cv.height !== vh){ cv.width = vw; cv.height = vh; }
+}
+
+function rr(x,y,w,h,r){ cx.beginPath(); cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h,r); cx.arcTo(x+w,y+h,x,y+h,r); cx.arcTo(x,y+h,x,y,r); cx.arcTo(x,y,x+w,y,r); cx.closePath(); }
+
+function drawBug(){
+  const W = cv.width, H = cv.height;
+  const u = Math.min(W,H)/720;                // scale unit
+  const x = 24*u, y = 24*u, rowH = 52*u, nameW = 230*u, setW = 50*u, scW = 76*u, pad = 12*u;
+  const totalW = 8*u + nameW + setW + scW;
+  const font = '"Hiragino Sans","Noto Sans JP",system-ui,sans-serif';
+  // header
+  cx.fillStyle = "rgba(10,12,18,.82)"; rr(x, y, totalW, 30*u, 8*u); cx.fill();
+  cx.fillStyle = "#cfd6e0"; cx.font = `700 ${17*u}px ${font}`; cx.textBaseline = "middle"; cx.textAlign = "left";
+  cx.fillText(S.done ? "試合終了" : `第${S.setNo}セット`, x+pad, y+15*u);
+  if (S.log.length){
+    cx.textAlign = "right"; cx.fillStyle = "#9aa4b2"; cx.font = `600 ${15*u}px ${font}`;
+    cx.fillText(S.log.map(p=>`${p[0]}-${p[1]}`).join("  "), x+totalW-pad, y+15*u);
+  }
+  const top = y + 34*u;
+  cx.fillStyle = "rgba(10,12,18,.86)"; rr(x, top, totalW, rowH*2, 10*u); cx.fill();
+  [0,1].forEach(t=>{
+    const ry = top + t*rowH, c = t ? "#3aa0ff" : "#ffb020";
+    cx.fillStyle = c; cx.fillRect(x, ry + (t?0:4*u), 8*u, rowH - 4*u);
+    // serve dot
+    if (S.serve === t && !S.done){ cx.beginPath(); cx.arc(x + nameW - 4*u, ry+rowH/2, 7*u, 0, Math.PI*2); cx.fillStyle = c; cx.fill(); }
+    // name
+    cx.fillStyle = "#fff"; cx.textAlign = "left"; cx.font = `800 ${26*u}px ${font}`;
+    let name = S.names[t]; while (cx.measureText(name).width > nameW - 40*u && name.length > 1) name = name.slice(0,-1);
+    cx.fillText(name, x + 8*u + pad, ry + rowH/2 + 1*u);
+    // sets
+    cx.fillStyle = "rgba(255,255,255,.12)"; cx.fillRect(x+8*u+nameW, ry+6*u, setW, rowH-12*u);
+    cx.fillStyle = "#e6ebf2"; cx.textAlign = "center"; cx.font = `800 ${24*u}px ${font}`;
+    cx.fillText(String(S.sets[t]), x+8*u+nameW+setW/2, ry+rowH/2+1*u);
+    // score
+    cx.fillStyle = c; cx.fillRect(x+8*u+nameW+setW, ry + (t?0:0), scW, rowH);
+    cx.fillStyle = "#111"; cx.font = `900 ${34*u}px ${font}`;
+    cx.fillText(String(S.score[t]), x+8*u+nameW+setW+scW/2, ry+rowH/2+2*u);
+  });
+  // divider
+  cx.fillStyle = "rgba(255,255,255,.14)"; cx.fillRect(x+8*u, top+rowH, nameW+setW, 1*u);
+  // set-end message on video
+  if (performance.now() < flashUntil){
+    cx.font = `800 ${30*u}px ${font}`; const tw = cx.measureText(flashText).width + 40*u;
+    cx.fillStyle = "rgba(255,255,255,.92)"; rr((W-tw)/2, H*0.16, tw, 56*u, 28*u); cx.fill();
+    cx.fillStyle = "#111"; cx.textAlign = "center"; cx.fillText(flashText, W/2, H*0.16 + 29*u);
+  }
+}
+
+function frame(){
+  fitCanvas();
+  if (video.readyState >= 2){ cx.drawImage(video, 0, 0, cv.width, cv.height); }
+  else { cx.fillStyle = "#000"; cx.fillRect(0,0,cv.width,cv.height); }
+  drawBug();
+  if (recorder){ const s = Math.floor((Date.now()-recStart)/1000); $("tt").textContent = `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- recording ---------- */
+let recorder = null, chunks = [], recStart = 0, lastBlob = null, lastName = "";
+function pickType(){
+  const list = ["video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm"];
+  for (const t of list){ try { if (MediaRecorder.isTypeSupported(t)) return t; } catch(e){} }
+  return "";
+}
+function startRec(){
+  if (!window.MediaRecorder || !cv.captureStream){ flash("このブラウザは録画に対応していません（iOS 15以降のSafariで開いてください）"); return; }
+  const out = cv.captureStream(30);
+  if (stream) stream.getAudioTracks().forEach(t => out.addTrack(t));
+  const type = pickType();
+  try { recorder = new MediaRecorder(out, type ? { mimeType:type, videoBitsPerSecond: S.q >= 1080 ? 8e6 : 5e6 } : undefined); }
+  catch(e){ recorder = new MediaRecorder(out); }
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    const mt = recorder.mimeType || type || "video/mp4";
+    lastBlob = new Blob(chunks, { type: mt });
+    const d = new Date(), p = n => String(n).padStart(2,"0");
+    lastName = `volley_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.${mt.includes("webm")?"webm":"mp4"}`;
+    recorder = null; chunks = [];
+    $("rec").classList.remove("on"); $("rec").setAttribute("aria-label","録画開始"); $("timer").hidden = true;
+    $("savedInfo").textContent = `${lastName}（約${Math.max(1,Math.round(lastBlob.size/1048576))}MB）`;
+    $("saved").hidden = false;
+  };
+  recorder.start(1000);
+  recStart = Date.now();
+  $("rec").classList.add("on"); $("rec").setAttribute("aria-label","録画停止"); $("timer").hidden = false;
+}
+function stopRec(){ if (recorder && recorder.state !== "inactive") recorder.stop(); }
+$("rec").onclick = () => recorder ? stopRec() : startRec();
+
+$("share").onclick = async () => {
+  if (!lastBlob) return;
+  const file = new File([lastBlob], lastName, { type: lastBlob.type });
+  if (navigator.canShare && navigator.canShare({ files:[file] })){
+    try { await navigator.share({ files:[file] }); flash("保存しました。次の録画ができます"); return; } catch(e){ if (e.name === "AbortError") return; }
+  }
+  download();
+};
+function download(){
+  const url = URL.createObjectURL(lastBlob);
+  const a = document.createElement("a"); a.href = url; a.download = lastName; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+}
+$("dl").onclick = () => lastBlob && download();
+$("discard").onclick = () => { lastBlob = null; $("saved").hidden = true; };
+
+/* ---------- controls ---------- */
+$("plusA").onclick = () => point(0);
+$("plusB").onclick = () => point(1);
+$("minusA").onclick = () => minus(0);
+$("minusB").onclick = () => minus(1);
+$("undo").onclick = undo;
+$("serveBtn").onclick = () => { snap(); S.serve = 1 - S.serve; ui(); };
+
+$("settings").onclick = () => {
+  $("inA").value = S.names[0]; $("inB").value = S.names[1];
+  $("inFmt").value = String(S.fmt); $("inPts").value = String(S.pts); $("inQ").value = String(S.q);
+  $("inQ").disabled = !!recorder;
+  $("confirmRow").hidden = true; $("sheet").hidden = false;
+};
+$("cancel").onclick = () => $("sheet").hidden = true;
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const q = +$("inQ").value, qChanged = q !== S.q;
+  S.names = [$("inA").value.trim() || "ホーム", $("inB").value.trim() || "アウェイ"];
+  S.fmt = +$("inFmt").value; S.pts = +$("inPts").value; S.q = q;
+  $("sheet").hidden = true; ui();
+  if (qChanged && !recorder && stream) await startCam();
+});
+$("swap").onclick = () => {
+  snap();
+  S.names.reverse(); S.score.reverse(); S.sets.reverse(); S.log = S.log.map(p => p.slice().reverse()); S.serve = 1 - S.serve;
+  $("inA").value = S.names[0]; $("inB").value = S.names[1]; ui();
+};
+$("reset").onclick = () => $("confirmRow").hidden = false;
+$("resetYes").onclick = () => {
+  const keep = { names:S.names, fmt:S.fmt, pts:S.pts, q:S.q };
+  snap(); S = Object.assign(fresh(), keep); $("sheet").hidden = true; ui(); flash("試合をリセットしました");
+};
+
+$("startBtn").onclick = async () => { if (await startCam()){ $("start").hidden = true; wake(); } };
+
+/* keep screen on */
+let lock = null;
+async function wake(){ try { if ("wakeLock" in navigator && document.visibilityState === "visible") lock = await navigator.wakeLock.request("screen"); } catch(e){} }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") wake();
+  else if (recorder) { stopRec(); }   // iOS pauses the camera in the background; save what we have
+});
+
+ui();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
