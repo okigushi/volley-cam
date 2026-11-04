@@ -22,6 +22,7 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .top{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));display:flex;gap:8px;z-index:3}
 .top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.top.left{right:auto;left:calc(8px + env(safe-area-inset-left,0px))}
 #timer{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:3;font-variant-numeric:tabular-nums}
 #timer .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--rec);margin-right:6px;vertical-align:1px}
 .bottom{position:fixed;left:0;right:0;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:3;
@@ -112,6 +113,15 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
       </select>
     </label>
     <label>1セットの点数<select id="inPts"><option value="25">25点</option><option value="21">21点</option><option value="15">15点</option></select></label>
+    <label>得点表示の位置
+      <select id="inPos">
+        <option value="tl">左上</option><option value="tr">右上</option>
+        <option value="bl">左下</option><option value="br">右下</option>
+      </select>
+    </label>
+    <label>得点表示の大きさ
+      <select id="inSize"><option value="0.55">とても小さい</option><option value="0.7">小さい</option><option value="0.85">ふつう</option><option value="1">大きい</option></select>
+    </label>
     <label>画質<select id="inQ"><option value="720">標準（720p・おすすめ）</option><option value="1080">高画質（1080p・重め）</option></select></label>
     <div class="row">
       <button type="button" id="swap">左右を入れ替え</button>
@@ -150,7 +160,7 @@ const KEY = "volley-cam-v1";
 /* ---------- score state ---------- */
 const PALETTE = [["紫","#7b3fe4"],["黄","#ffb020"],["青","#3aa0ff"],["赤","#e53935"],["緑","#2e9e5b"],["オレンジ","#ff7a1a"],["ピンク","#ff5fa2"],["水色","#33c4e8"],["紺","#1f3a93"],["白","#f2f2f2"],["黒","#2b2b2b"]];
 const ink = hex => { const n = parseInt(hex.slice(1),16), r=n>>16&255, g=n>>8&255, b=n&255; return (0.299*r+0.587*g+0.114*b) > 150 ? "#111" : "#fff"; };
-const fresh = () => ({ names:["ホーム","アウェイ"], colors:["#ffb020","#3aa0ff"], fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
+const fresh = () => ({ names:["ホーム","アウェイ"], colors:["#ffb020","#3aa0ff"], pos:"tl", size:0.7, fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
 let S = fresh(), past = [];
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.score) S = Object.assign(fresh(), s); } catch(e){}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} };
@@ -183,6 +193,7 @@ function ui(){
   const r = document.documentElement.style;
   r.setProperty("--a", S.colors[0]); r.setProperty("--a-ink", ink(S.colors[0]));
   r.setProperty("--b", S.colors[1]); r.setProperty("--b-ink", ink(S.colors[1]));
+  document.querySelector(".top").classList.toggle("left", S.pos === "tr");   // keep buttons off the score
   save();
 }
 /* color swatches in settings */
@@ -264,9 +275,12 @@ function rr(x,y,w,h,r){ cx.beginPath(); cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h
 
 function drawBug(){
   const W = cv.width, H = cv.height;
-  const u = Math.min(W,H)/720;                // scale unit
-  const x = 24*u, y = 24*u, rowH = 52*u, nameW = 230*u, setW = 50*u, scW = 76*u, pad = 12*u;
-  const totalW = 8*u + nameW + setW + scW;
+  const base = Math.min(W,H)/720, u = base * (S.size || 0.7);   // scale unit
+  const rowH = 52*u, nameW = 230*u, setW = 50*u, scW = 76*u, pad = 12*u;
+  const totalW = 8*u + nameW + setW + scW, totalH = 34*u + rowH*2, m = 20*base;
+  const pos = S.pos || "tl";
+  const x = pos[1] === "r" ? W - m - totalW : m;
+  const y = pos[0] === "b" ? H - m - totalH : m;
   const font = '"Hiragino Sans","Noto Sans JP",system-ui,sans-serif';
   // header
   cx.fillStyle = "rgba(10,12,18,.82)"; rr(x, y, totalW, 30*u, 8*u); cx.fill();
@@ -375,6 +389,7 @@ $("serveBtn").onclick = () => { snap(); S.serve = 1 - S.serve; ui(); };
 $("settings").onclick = () => {
   $("inA").value = S.names[0]; $("inB").value = S.names[1];
   pick = S.colors.slice(); swatches();
+  $("inPos").value = S.pos; $("inSize").value = String(S.size);
   $("inFmt").value = String(S.fmt); $("inPts").value = String(S.pts); $("inQ").value = String(S.q);
   $("inQ").disabled = !!recorder;
   $("confirmRow").hidden = true; $("sheet").hidden = false;
@@ -384,7 +399,7 @@ $("form").addEventListener("submit", async e => {
   e.preventDefault();
   const q = +$("inQ").value, qChanged = q !== S.q;
   S.names = [$("inA").value.trim() || "ホーム", $("inB").value.trim() || "アウェイ"];
-  S.colors = pick.slice();
+  S.colors = pick.slice(); S.pos = $("inPos").value; S.size = +$("inSize").value;
   S.fmt = +$("inFmt").value; S.pts = +$("inPts").value; S.q = q;
   $("sheet").hidden = true; ui();
   if (qChanged && !recorder && stream) await startCam();
@@ -396,7 +411,7 @@ $("swap").onclick = () => {
 };
 $("reset").onclick = () => $("confirmRow").hidden = false;
 $("resetYes").onclick = () => {
-  const keep = { names:S.names, colors:S.colors, fmt:S.fmt, pts:S.pts, q:S.q };
+  const keep = { names:S.names, colors:S.colors, pos:S.pos, size:S.size, fmt:S.fmt, pts:S.pts, q:S.q };
   snap(); S = Object.assign(fresh(), keep); $("sheet").hidden = true; ui(); flash("試合をリセットしました");
 };
 
