@@ -22,7 +22,8 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .top{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));display:flex;gap:8px;z-index:3}
 .top button,.chip{font:600 14px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-#micBtn{color:#ffb4ab;border-color:rgba(255,120,110,.6)}
+#micBtn.warn{color:#ffb4ab;border-color:rgba(255,120,110,.6)}
+#micBtn.off{color:var(--muted)}
 .top.left{right:auto;left:calc(8px + env(safe-area-inset-left,0px))}
 #timer{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:3;font-variant-numeric:tabular-nums}
 #timer .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--rec);margin-right:6px;vertical-align:1px}
@@ -162,7 +163,7 @@ const KEY = "volley-cam-v1";
 /* ---------- score state ---------- */
 const PALETTE = [["紫","#7b3fe4"],["黄","#ffb020"],["青","#3aa0ff"],["赤","#e53935"],["緑","#2e9e5b"],["オレンジ","#ff7a1a"],["ピンク","#ff5fa2"],["水色","#33c4e8"],["紺","#1f3a93"],["白","#f2f2f2"],["黒","#2b2b2b"]];
 const ink = hex => { const n = parseInt(hex.slice(1),16), r=n>>16&255, g=n>>8&255, b=n&255; return (0.299*r+0.587*g+0.114*b) > 150 ? "#111" : "#fff"; };
-const fresh = () => ({ names:["ホーム","アウェイ"], colors:["#ffb020","#3aa0ff"], pos:"tl", size:0.7, fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
+const fresh = () => ({ names:["ホーム","アウェイ"], colors:["#ffb020","#3aa0ff"], pos:"tl", size:0.7, mic:true, fmt:3, pts:25, q:720, score:[0,0], sets:[0,0], serve:0, setNo:1, log:[], done:false });
 let S = fresh(), past = [];
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.score) S = Object.assign(fresh(), s); } catch(e){}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} };
@@ -272,9 +273,17 @@ async function startCam(){
 const AUDIO = { echoCancellation:false, noiseSuppression:false, autoGainControl:true };
 let actx = null, adest = null, asrc = null;
 function micTrack(){ const t = stream && stream.getAudioTracks()[0]; return t && t.readyState === "live" ? t : null; }
+function micUI(){
+  const b = $("micBtn"), live = !!micTrack();
+  b.hidden = !stream;
+  b.classList.remove("warn","off");
+  if (!S.mic){ b.textContent = "🔇 音なし"; b.classList.add("off"); b.setAttribute("aria-label","音なしで録画（押すと音ありに）"); }
+  else if (live){ b.textContent = "🎤 音あり"; b.setAttribute("aria-label","音ありで録画（押すと音なしに）"); }
+  else { b.textContent = "🎤 マイクOFF"; b.classList.add("warn"); b.setAttribute("aria-label","マイクを許可する"); }
+}
 function setupAudio(){
   const t = micTrack();
-  $("micBtn").hidden = !!t;
+  micUI();
   if (!t) return;
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -287,13 +296,18 @@ function setupAudio(){
   } catch(e){ adest = null; }
 }
 $("micBtn").onclick = async () => {
+  if (recorder){ flash("録画中は切り替えられません。止めてから切り替えてください"); return; }
+  if (S.mic && micTrack()){ S.mic = false; save(); micUI(); flash("音なしで録画します"); return; }
+  S.mic = true; save();
+  if (micTrack()){ micUI(); flash("音ありで録画します"); return; }
   try {
     const a = await navigator.mediaDevices.getUserMedia({ audio:AUDIO });
     stream.getAudioTracks().forEach(t => { t.stop(); stream.removeTrack(t); });
     a.getAudioTracks().forEach(t => stream.addTrack(t));
     setupAudio(); flash("マイクがオンになりました");
   } catch(e){
-    flash("マイクが使えません。iPhoneの設定でこのブラウザのマイクを許可してください");
+    micUI();
+    flash("マイクが使えません。スマホの設定でこのブラウザのマイクを許可してください");
   }
 };
 
@@ -397,9 +411,9 @@ function startRec(){
   if (!window.MediaRecorder || !cv.captureStream){ flash("このブラウザは録画に対応していません（iOS 15以降のSafariで開いてください）"); return; }
   const out = cv.captureStream(30);
   if (actx) actx.resume().catch(()=>{});
-  const aTracks = adest ? adest.stream.getAudioTracks() : (micTrack() ? [micTrack()] : []);
+  const aTracks = !S.mic ? [] : adest ? adest.stream.getAudioTracks() : (micTrack() ? [micTrack()] : []);
   aTracks.forEach(t => out.addTrack(t));
-  if (!aTracks.length) flash("マイクがオフのため、音声なしで録画します");
+  if (S.mic && !aTracks.length) flash("マイクが使えないため、音なしで録画します");
   const type = pickType();
   try { recorder = new MediaRecorder(out, type ? { mimeType:type, videoBitsPerSecond: S.q >= 1080 ? 8e6 : 5e6 } : undefined); }
   catch(e){ recorder = new MediaRecorder(out); }
