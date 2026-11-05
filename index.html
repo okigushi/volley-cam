@@ -52,6 +52,14 @@ video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .minus{font:600 13px var(--jp);color:var(--fg);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:7px 14px;width:max-content}
 #rec{width:74px;height:74px;border-radius:50%;border:4px solid #fff;background:transparent;display:grid;place-items:center;padding:0}
 #rec span{width:54px;height:54px;border-radius:50%;background:var(--rec);transition:all .2s}
+.recwrap{position:relative}
+#pause{position:absolute;right:calc(100% + 14px);top:50%;transform:translateY(-50%);width:52px;height:52px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.85);background:var(--glass);display:grid;place-items:center;padding:0;
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+#pause svg{width:22px;height:22px;fill:#fff}
+#pause.resume{background:#fff} #pause.resume svg{fill:#111}
+#timer.paused .dot{background:var(--muted);animation:none}
+#timer.paused{color:var(--muted)}
 #rec.on span{width:28px;height:28px;border-radius:7px}
 button{cursor:pointer}
 button:focus-visible{outline:3px solid #fff;outline-offset:2px}
@@ -89,7 +97,10 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
     <button type="button" class="minus" id="minusA">−1</button>
     <button type="button" class="plus" id="plusA">＋1<small id="labA">ホーム</small></button>
   </div>
-  <button type="button" id="rec" aria-label="録画開始"><span></span></button>
+  <div class="recwrap">
+    <button type="button" id="pause" aria-label="一時停止" hidden></button>
+    <button type="button" id="rec" aria-label="録画開始"><span></span></button>
+  </div>
   <div class="pt right">
     <button type="button" class="minus" id="minusB">−1</button>
     <button type="button" class="plus" id="plusB">＋1<small id="labB">アウェイ</small></button>
@@ -115,7 +126,7 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 <!-- settings -->
 <div class="sheet" id="sheet" hidden>
   <form class="card" id="form">
-    <h2>試合の設定 <span style="font-size:12px;font-weight:500;color:var(--muted)">バージョン 11/05-2</span></h2>
+    <h2>試合の設定 <span style="font-size:12px;font-weight:500;color:var(--muted)">バージョン 11/05-5</span></h2>
     <label>左のチーム名<input id="inA" maxlength="12" autocomplete="off"></label>
     <div class="label-like" style="display:grid;gap:6px;font-size:13px;color:var(--muted)">左のチームの色<div class="colors" id="colA"></div></div>
     <label>右のチーム名<input id="inB" maxlength="12" autocomplete="off"></label>
@@ -276,8 +287,8 @@ async function startCam(){
   }
   video.srcObject = new MediaStream(stream.getVideoTracks());
   await video.play().catch(()=>{});
-  setupZoom();
   setupAudio();
+  setupZoom().catch(()=>{});
   return true;
 }
 
@@ -325,29 +336,84 @@ $("micBtn").onclick = async () => {
 
 /* ---------- zoom: camera zoom where the phone offers it, otherwise a centre crop ---------- */
 let hw = null, zMin = 1, zMax = 4, zCur = 1, dz = 1, lastHz = null, zTimer = null, chipT = null, presets = [];
-function setupZoom(){
+let camMode = "main", mainId = null, uwId = null, switching = false;
+const UW = 0.5;   // the ultra-wide lens is shown as 0.5x, like the iPhone camera app
+function readHw(){
   hw = null; lastHz = null;
   const track = stream && stream.getVideoTracks()[0];
-  const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  let caps = {}; try { caps = track && track.getCapabilities ? track.getCapabilities() : {}; } catch(e){}
   if (caps.zoom && caps.zoom.max > caps.zoom.min) hw = { min: caps.zoom.min, max: caps.zoom.max };
   zMin = hw ? Math.min(hw.min, 1) : 1;
   zMax = hw ? Math.max(Math.min(hw.max, 10), 4) : 4;
+}
+async function findCameras(){
+  mainId = null; uwId = null;
+  try { mainId = stream.getVideoTracks()[0].getSettings().deviceId || null; } catch(e){}
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    const uw = devs.find(d => /ultra\s*wide|超広角/i.test(d.label));
+    if (uw && uw.deviceId !== mainId) uwId = uw.deviceId;
+  } catch(e){}
+}
+async function setupZoom(){
+  camMode = "main";
+  readHw();
+  await findCameras();
   presets = [];
-  if (zMin < 0.95) presets.push({ z: zMin, l: "広角" });
+  if (uwId) presets.push({ z: UW, l: "広角", uw: true });
+  else if (zMin < 0.95) presets.push({ z: zMin, l: "広角" });
   presets.push({ z: 1, l: "標準" }, { z: 2, l: "2x" }, { z: 3, l: "3x" });
   presets = presets.filter(p => p.z <= zMax + 0.01);
   const bar = $("zoomBar"); bar.innerHTML = "";
   presets.forEach(p => {
     const b = document.createElement("button"); b.type = "button"; b.textContent = p.l; b.dataset.z = p.z;
     b.setAttribute("aria-label", p.l === "広角" ? `広角（${Math.round(p.z*10)/10}x）` : p.l === "標準" ? "標準（1x）" : `ズーム ${p.l}`);
-    b.onclick = () => { setZoom(p.z); showChip(); };
+    b.onclick = async () => {
+      if (switching) return;
+      if (p.uw) await switchCam("uw"); else if (camMode === "uw") await switchCam("main");
+      setZoom(p.z); showChip();
+    };
     bar.appendChild(b);
   });
   bar.hidden = false;
   let saved = 1; try { const s = +localStorage.getItem(KEY + "-zoom"); if (s) saved = s; } catch(e){}
+  if (saved < 0.95 && uwId) await switchCam("uw");
   setZoom(saved);
 }
+/* swap only the picture; the recording keeps running because it records the canvas */
+async function switchCam(mode){
+  if (mode === camMode || switching) return;
+  switching = true;
+  const h = S.q, w = Math.round(h*16/9);
+  const vc = id => id ? { deviceId:{exact:id}, width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} }
+                      : { facingMode:{ideal:"environment"}, width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} };
+  stream.getVideoTracks().forEach(t => { t.stop(); stream.removeTrack(t); });
+  let ns = null;
+  try { ns = await navigator.mediaDevices.getUserMedia({ video: vc(mode === "uw" ? uwId : mainId), audio:false }); camMode = mode; }
+  catch(e){
+    flash("広角カメラに切り替えられませんでした");
+    try { ns = await navigator.mediaDevices.getUserMedia({ video: vc(mainId), audio:false }); } catch(e2){}
+    camMode = "main";
+  }
+  if (ns) ns.getVideoTracks().forEach(t => stream.addTrack(t));
+  video.srcObject = new MediaStream(stream.getVideoTracks());
+  await video.play().catch(()=>{});
+  if (camMode === "main") readHw(); else { hw = null; lastHz = null; }
+  switching = false;
+}
 function setZoom(z){
+  // pinching past 1x hops between the ultra-wide and the main lens
+  if (!switching && uwId){
+    if (camMode === "main" && z < 0.95){ switchCam("uw").then(() => setZoom(z)); return; }
+    if (camMode === "uw" && z > 1.05){ switchCam("main").then(() => setZoom(z)); return; }
+  }
+  if (camMode === "uw"){
+    // on the ultra-wide lens, pinching crops in between 0.5x and 1x
+    zCur = Math.min(1, Math.max(UW, z)); dz = zCur / UW;
+    $("zoomBar").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(Math.abs(+b.dataset.z - zCur) < 0.05)));
+    try { localStorage.setItem(KEY + "-zoom", String(zCur)); } catch(e){}
+    return;
+  }
   zCur = Math.min(zMax, Math.max(zMin, z));
   const hz = hw ? Math.min(hw.max, Math.max(hw.min, zCur)) : 1;
   dz = Math.max(1, zCur / hz);                       // whatever the camera can't do, crop digitally
@@ -436,7 +502,10 @@ function frame(){
   }
   else { cx.fillStyle = "#000"; cx.fillRect(0,0,cv.width,cv.height); }
   drawBug();
-  if (recorder){ const s = Math.floor((Date.now()-recStart)/1000); $("tt").textContent = `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; }
+  if (recorder && !$("rec").disabled){
+    const now = Date.now(), s = Math.max(0, Math.floor((now - recStart - pausedTotal - (pausedAt ? now - pausedAt : 0))/1000));
+    $("tt").textContent = (pausedAt ? "一時停止中 " : "") + `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  }
   requestAnimationFrame(frame);
 }
 
@@ -456,25 +525,73 @@ function startRec(){
   aTracks.forEach(t => out.addTrack(t));
   if (S.mic && !aTracks.length) flash("マイクが使えないため、音なしで録画します");
   const type = pickType();
-  try { recorder = new MediaRecorder(out, type ? { mimeType:type, videoBitsPerSecond: S.q >= 1080 ? 8e6 : 5e6 } : undefined); }
-  catch(e){ recorder = new MediaRecorder(out); }
-  chunks = [];
-  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-  recorder.onstop = () => {
-    const mt = recorder.mimeType || type || "video/mp4";
-    lastBlob = new Blob(chunks, { type: mt });
+  // lower bitrates keep long recordings from filling the phone's memory
+  let r;
+  try { r = new MediaRecorder(out, type ? { mimeType:type, videoBitsPerSecond: S.q >= 1080 ? 6e6 : 3.5e6 } : undefined); }
+  catch(e){ r = new MediaRecorder(out); }
+  const mine = [];
+  let done = false;
+  r.ondataavailable = e => { if (e.data && e.data.size) mine.push(e.data); };
+  // one finish path, used by onstop or by the safety timer when the phone never fires onstop
+  r._finish = () => {
+    if (done) return; done = true;
+    clearTimeout(r._timer);
+    out.getVideoTracks().forEach(t => { try { t.stop(); } catch(e){} });
+    if (recorder === r) recorder = null;
+    $("rec").disabled = false; $("rec").classList.remove("on"); $("rec").setAttribute("aria-label","録画開始"); $("timer").hidden = true;
+    $("pause").hidden = true; pausedAt = 0; pauseUI(false);
+    if (!mine.length){ flash("録画を保存できませんでした。もう一度録画してください"); return; }
+    const mt = r.mimeType || type || "video/mp4";
+    lastBlob = new Blob(mine, { type: mt });
     const d = new Date(), p = n => String(n).padStart(2,"0");
     lastName = `volley_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.${mt.includes("webm")?"webm":"mp4"}`;
-    recorder = null; chunks = [];
-    $("rec").classList.remove("on"); $("rec").setAttribute("aria-label","録画開始"); $("timer").hidden = true;
     $("savedInfo").textContent = `${lastName}（約${Math.max(1,Math.round(lastBlob.size/1048576))}MB）`;
     $("saved").hidden = false;
   };
-  recorder.start(1000);
-  recStart = Date.now();
+  r.onstop = () => r._finish();
+  r.onerror = () => r._finish();
+  try { r.start(1000); }
+  catch(e){ flash("録画を始められませんでした。ページを開き直してください"); return; }
+  recorder = r; chunks = mine;
+  recStart = Date.now(); pausedAt = 0; pausedTotal = 0;
   $("rec").classList.add("on"); $("rec").setAttribute("aria-label","録画停止"); $("timer").hidden = false;
+  pauseUI(false); $("pause").hidden = false;
 }
-function stopRec(){ if (recorder && recorder.state !== "inactive") recorder.stop(); }
+
+/* ---------- pause / resume ---------- */
+let pausedAt = 0, pausedTotal = 0;
+const PAUSE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1.5"/><rect x="14" y="4" width="5" height="16" rx="1.5"/></svg>';
+const PLAY_SVG  = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>';
+function pauseUI(paused){
+  const b = $("pause");
+  b.innerHTML = paused ? PLAY_SVG : PAUSE_SVG;
+  b.classList.toggle("resume", paused);
+  b.setAttribute("aria-label", paused ? "録画を再開" : "一時停止");
+  $("timer").classList.toggle("paused", paused);
+}
+$("pause").onclick = () => {
+  const r = recorder;
+  if (!r || $("rec").disabled) return;
+  try {
+    if (r.state === "recording"){
+      r.pause();
+      if (r.state !== "paused"){ flash("この機種では一時停止が使えません"); return; }
+      pausedAt = Date.now(); pauseUI(true); flash("一時停止中です。▶ で再開します");
+    } else if (r.state === "paused"){
+      r.resume();
+      pausedTotal += Date.now() - pausedAt; pausedAt = 0; pauseUI(false); flash("録画を再開しました");
+    }
+  } catch(e){ flash("この機種では一時停止が使えません"); }
+};
+function stopRec(){
+  const r = recorder;
+  if (!r) return;
+  // show the stop right away, even if the phone is slow to hand back the video
+  $("rec").classList.remove("on"); $("rec").disabled = true; $("tt").textContent = "保存中…"; $("pause").hidden = true;
+  try { if (r.state !== "inactive"){ try { r.requestData(); } catch(e){} r.stop(); } else r._finish(); }
+  catch(e){ r._finish(); }
+  r._timer = setTimeout(() => r._finish(), 4000);
+}
 $("rec").onclick = () => recorder ? stopRec() : startRec();
 
 $("share").onclick = async () => {
